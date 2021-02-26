@@ -14,7 +14,7 @@ class OpenSubtitlesClient:
         self._init_session()
         self._session.auth = ApiAuthentication(api_key)
     
-    def _init_session(self) -> Session:
+    def _init_session(self):
         self._session = Session()
         self._session.headers.update({
             'Content-Type': 'multipart/form-data',
