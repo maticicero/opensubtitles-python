@@ -1,10 +1,14 @@
+import attr
+
 from typing import Optional
 
+@attr.s(frozen=True)
 class ApiException(Exception):
-    code: int
-    reason: Optional[str]
-
-    def __init__(self, response: dict):
-        self.code = response['status']
-        self.reason = str(response.get('errors', '')) or response.get('message')
-        super().__init__(f'HTTP {self.code} - {self.reason}')
+    code: int = attr.ib(
+        validator=attr.validators.instance_of(int)
+    )
+    reason: Optional[str] = attr.ib(
+        default=None,
+        converter=str,
+        validator=attr.validators.optional(attr.validators.instance_of(str))
+    )
