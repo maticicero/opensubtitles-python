@@ -1,100 +1,90 @@
-from functools import partial, reduce
-from json import JSONDecodeError
-from requests import PreparedRequest, Request, Response, Session
-from typing import Callable, Type
+from dataclasses import dataclass, field
+from posixpath import join
+from typing import Any, Callable, Dict, Optional, Union
 
-from .auth import ApiAuthentication
-from .exceptions import ApiException
+from requests import Session, Request, Response
+from requests.auth import AuthBase
 
-_ENDPOINT = 'https://www.opensubtitles.com'
 
+@dataclass(frozen=True)
+class ApiAuthentication(AuthBase):
+    api_key: str
+    token: Optional[str] = field(default=None)
+
+    def __call__(self, request: Request) -> Request:
+        request.headers['Api-Key'] = self.api_key
+        if self.token:
+            request.headers['Authentication'] = f'Bearer {self.token}'
+        return request
+
+
+_API_ENDPOINT = 'https://www.opensubtitles.com/api'
+_API_VERSION = 'v1'
+
+
+def execute_api_operation(method: Callable[[str, ...], Response], operation: str, **kwargs) -> Dict:
+    timeout = kwargs.pop('_timeout', None)
+    with method(join(_API_ENDPOINT, _API_VERSION, operation), timeout=timeout, **kwargs) as response:
+        return response.json()
+
+
+def GET(session: Session, operation: str, **kwargs) -> Dict:
+    return execute_api_operation(session.get, operation, params=kwargs)
+
+
+def POST(session: Session, operation: str, **kwargs) -> Dict:
+    return execute_api_operation(session.post, operation, data=kwargs)
+
+
+@dataclass(frozen=True)
 class ApiOperation:
+    method: Callable[[Session, str, ...], Dict]
+    name: str
+    callback: Optional[Callable[[Dict, Session], Dict]] = field(default=None)
+    void: bool = field(default=False)
 
-    _session: Session
-    _name: str
-    _method: str
-    _timeout: int
-    _request_interceptors: list[Callable[[Request], Request]]
-    _response_interceptors: list[Callable[[Response], Response]]
-    _post_callback: Callable[[dict], None]
-    _void: bool
-
-    def __init__(self, session: Session, name: str, method: str = 'GET', timeout: int = 5):
-        self._session = session
-        self._name = name
-        self._method = method
-        self._timeout = timeout
-        self._request_interceptors = []
-        self._response_interceptor = []
-        self._void = False
-    
-    @staticmethod
-    def _parse_response(response: Response) -> dict:
-            try:
-                data = response.json()
-            except JSONDecodeError as e:
-                raise ApiException(response.status_code) from e
-            if not response.ok:
-                raise ApiException(data['status'], data.get('errors') or data.get('message'))
-            return data
-
-    def _execute(self, data: dict) -> dict:
-        request: PreparedRequest = reduce(lambda req, intercept: intercept(req), self._request_interceptors, Request(
-            self._method, f'{_ENDPOINT}/api/v1/{self._name}',
-            data=data, auth=self._session.auth, headers=self._session.headers
-        )).prepare()
-        with self._session.send(request, timeout=self._timeout) as response:
-            response: Response = reduce(lambda resp, intercept: intercept(resp), self._response_interceptor, response)
-            content = self._parse_response(response)
-            self._post_callback(content)
-            return None if self._void else content
-    
-    def __call__(self, **data) -> dict:
-        return self._execute(data)
-    
-    def with_request_interceptor(self, interceptor: Callable[[Request], Request]) -> 'ApiOperation':
-        self._request_interceptors.append(interceptor)
-        return self
-
-    def with_response_interceptor(self, interceptor: Callable[[Response], Response]) -> 'ApiOperation':
-        self._response_interceptors.append(interceptor)
-        return self
-    
-    def do_after(self, callback: Callable[[dict], None]) -> 'ApiOperation':
-        self._post_callback = callback
-        return self
-    
-    def no_response(self) -> 'ApiOperation':
-        self._void = True
-        return self
 
 class OpenSubtitlesClient:
+    _USER_AGENT = 'OpenSubtitles-Python'
 
     _session: Session
+    _timeout: int
 
-    # -- API Operations
-    login: ApiOperation
-    subtitles: ApiOperation
+    def __init__(self, api_key: str, timeout=5):
+        self._session = self._new_session(api_key)
+        self._timeout = timeout
 
-    def __init__(self, api_key: str):
-        self._init_session()
-        self._init_operations()
-        self._session.auth = ApiAuthentication(api_key)
-    
-    def _init_session(self):
-        self._session = Session()
-        self._session.headers.update({
-            'Content-Type': 'multipart/form-data',
-            'User-Agent': 'OpenSubtitles-Python'
+    def __getattribute__(self, attr: str) -> Any:
+        value: Union[ApiOperation, Any] = super().__getattribute__(attr)
+        if isinstance(value, ApiOperation):
+            operation = value
+
+            def _operation(**kwargs):
+                response = operation.method(self._session, operation.name, _timeout=self._timeout, **kwargs)
+                response = operation.callback(response, self._session) if operation.callback else response
+                return None if operation.void else response
+
+            return _operation
+        return value
+
+    @classmethod
+    def _new_session(cls, api_key: str) -> Session:
+        session = Session()
+        session.headers.update({
+            'User-Agent': cls._USER_AGENT
         })
-    
-    def _init_operations(self):
-        api_operation = partial(ApiOperation, self._session)
-        self.login = api_operation('login', 'POST').do_after(self._on_login).no_response()
-        self.subtitles = api_operation('subtitles', 'GET')
-    
-    def _on_login(self, data: dict):
-        self._session.auth = ApiAuthentication(self._session.auth.api_key, data['token'])
-    
+        session.auth = ApiAuthentication(api_key)
+        return session
+
     def close(self):
         self._session.close()
+
+
+def _on_login(data: Dict, session: Session, *_, **__):
+    session.auth = ApiAuthentication(session.auth.api_key, data['token'])
+    return data
+
+
+# -- API Operations
+OpenSubtitlesClient.login = ApiOperation(POST, 'login', callback=_on_login, void=True)
+OpenSubtitlesClient.subtitles = ApiOperation(GET, 'subtitles')
