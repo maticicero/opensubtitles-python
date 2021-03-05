@@ -49,9 +49,8 @@ class OpenSubtitlesClient:
         self._session.close()
 
 
-def _on_login(data: Dict, session: Session, *_, **__):
+def _on_login(data: Dict, session: Session, *_, **__) -> None:
     session.auth = ApiAuthentication(session.auth.api_key, data['token'])
-    return data
 
 
 # -- API Operations

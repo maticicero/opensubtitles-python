@@ -68,11 +68,12 @@ class ApiOperation:
     """
     execute: Callable[[Session, str, ...], Dict]
     name: str
-    callback: Callable[[Dict, Session], Dict] = field(default=lambda data, *_: data)
+    callback: Callable[[Dict, Session], Dict] = field(default=lambda *_: None)
     void: bool = field(default=False)
 
     def __call__(self, session: Session, **kwargs) -> Optional[Dict]:
-        response = self.callback(self.execute(session, self.name, timeout=kwargs.pop('timeout'), **kwargs), session)
+        response = self.execute(session, self.name, **kwargs)
+        self.callback(response, session)
         return None if self.void else response
 
 
