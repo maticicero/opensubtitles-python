@@ -55,5 +55,8 @@ def _on_login(data: Dict, session: Session, *_, **__):
 
 
 # -- API Operations
+OpenSubtitlesClient.download = POST('download')
 OpenSubtitlesClient.login = POST('login', callback=_on_login, void=True)
-OpenSubtitlesClient.subtitles = GET('subtitles')
+OpenSubtitlesClient.latest = GET('discover/subtitles')
+OpenSubtitlesClient.popular = GET('discover/most_downloaded')
+OpenSubtitlesClient.search = GET('subtitles')
